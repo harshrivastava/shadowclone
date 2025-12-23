@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+*~
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+DAY2_SUMMARY.md
