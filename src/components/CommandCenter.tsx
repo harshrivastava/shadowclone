@@ -1,339 +1,325 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Mic, Zap, MicOff, Volume2, VolumeX } from 'lucide-react';
+import { Send, Mic, MicOff, Zap, Clock, User, Bot, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { ChatMessage, UserProfile } from '../types';
+import { Button } from './ui/Button';
 
 interface CommandCenterProps {
     userProfile: UserProfile;
     userAvatar: string | null;
     themeColors: string[];
-    isDarkMode?: boolean;
 }
 
-const CommandCenter: React.FC<CommandCenterProps> = ({ userProfile, userAvatar, themeColors, isDarkMode }) => {
+const CommandCenter: React.FC<CommandCenterProps> = ({ userProfile }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
-    const [input, setInput] = useState('');
-    const [isThinking, setIsThinking] = useState(false);
+    const [inputValue, setInputValue] = useState('');
     const [isListening, setIsListening] = useState(false);
-    const [isMuted, setIsMuted] = useState(false);
+    const [isThinking, setIsThinking] = useState(false);
     const [vocalLevel, setVocalLevel] = useState(0);
-    const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
-    const audioChunksRef = useRef<Blob[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const audioContextRef = useRef<AudioContext | null>(null);
-    const analyzerRef = useRef<AnalyserNode | null>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
     const animationFrameRef = useRef<number | null>(null);
 
-    // Audio Analysis for Visualizer
-    const startAudioAnalysis = async (stream: MediaStream) => {
-        try {
-            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-            audioContextRef.current = new AudioContextClass();
-            analyzerRef.current = audioContextRef.current.createAnalyser();
-            const source = audioContextRef.current.createMediaStreamSource(stream);
-            source.connect(analyzerRef.current);
-            analyzerRef.current.fftSize = 256;
-
-            const bufferLength = analyzerRef.current.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
-
-            const updateLevel = () => {
-                if (!analyzerRef.current) return;
-                analyzerRef.current.getByteFrequencyData(dataArray);
-                const average = dataArray.reduce((prev, curr) => prev + curr, 0) / bufferLength;
-                setVocalLevel(average);
-                animationFrameRef.current = requestAnimationFrame(updateLevel);
-            };
-
-            updateLevel();
-        } catch (err) {
-            console.error('Mic analysis failed:', err);
-        }
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
-    const stopAudioAnalysis = () => {
-        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-        if (audioContextRef.current) {
-            audioContextRef.current.close().catch(e => console.error("Error closing audio context:", e));
-            audioContextRef.current = null;
-        }
-        setVocalLevel(0);
-    };
+    useEffect(() => {
+        scrollToBottom();
+    }, [messages]);
 
+    useEffect(() => {
+        if (messages.length === 0) {
+            setMessages([{
+                role: 'assistant',
+                content: `KRACHET Workspace initialized. Systems normal. How can I assist you today, ${userProfile.name}?`,
+                timestamp: Date.now(),
+                type: 'text'
+            }]);
+        }
+    }, [userProfile.name]);
+
+    // VOICE RECORDING LOGIC
     const startRecording = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-            const options = { mimeType: 'audio/webm' };
-            let recorder: MediaRecorder;
-
-            try {
-                if (MediaRecorder.isTypeSupported('audio/webm')) {
-                    recorder = new MediaRecorder(stream, options);
-                } else {
-                    recorder = new MediaRecorder(stream);
-                }
-            } catch (e) {
-                recorder = new MediaRecorder(stream);
-            }
-
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
             audioChunksRef.current = [];
 
-            recorder.ondataavailable = (event) => {
+            // Visualizer setup
+            const audioContext = new AudioContext();
+            const source = audioContext.createMediaStreamSource(stream);
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            const updateVolume = () => {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                    sum += dataArray[i];
+                }
+                const average = sum / bufferLength;
+                setVocalLevel(average);
+                animationFrameRef.current = requestAnimationFrame(updateVolume);
+            };
+            updateVolume();
+
+            mediaRecorder.ondataavailable = (event) => {
                 if (event.data.size > 0) {
                     audioChunksRef.current.push(event.data);
                 }
             };
 
-            recorder.onstop = async () => {
-                const finalMimeType = recorder.mimeType;
-                const audioBlob = new Blob(audioChunksRef.current, { type: finalMimeType });
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 const arrayBuffer = await audioBlob.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
 
-                setIsListening(false);
                 setIsThinking(true);
-                stopAudioAnalysis();
-
                 try {
-                    const result = await window.api.transcribe({
-                        audioBuffer: new Uint8Array(arrayBuffer),
-                        mimeType: finalMimeType
+                    const result = await (window as any).api.transcribe({
+                        audioBuffer: uint8Array,
+                        mimeType: 'audio/webm'
                     });
 
-                    if (result.success && result.text) {
-                        handleSendMessage(result.text);
-                    } else {
-                        console.error('Transcription failed:', result.error);
-                        setMessages(prev => [...prev, {
-                            role: 'assistant',
-                            content: `Sorry, I couldn't hear you correctly. Please try again.`,
-                            timestamp: Date.now()
-                        }]);
-                        setIsThinking(false);
+                    if (result && result.success && result.text && result.text.trim()) {
+                        setInputValue(result.text);
                     }
                 } catch (error) {
-                    console.error('Transcription error:', error);
+                    console.error('[CommandCenter] Transcription failed:', error);
+                } finally {
                     setIsThinking(false);
+                    // Cleanup stream
+                    stream.getTracks().forEach(track => track.stop());
                 }
-
-                stream.getTracks().forEach(track => track.stop());
             };
 
-            recorder.onstart = () => console.log('[MediaRecorder] Recording started');
-            recorder.onerror = (e: any) => console.error('[MediaRecorder] Error:', e.error);
-
-            recorder.start();
-            setMediaRecorder(recorder);
+            mediaRecorder.start();
             setIsListening(true);
-            startAudioAnalysis(stream);
-        } catch (err) {
-            console.error('Failed to start recording:', err);
+        } catch (error) {
+            console.error('[CommandCenter] Microphone access failed:', error);
             setIsListening(false);
-            setIsThinking(false);
         }
     };
 
     const stopRecording = () => {
-        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            mediaRecorder.stop();
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.stop();
         }
-    };
-
-    const speak = (text: string) => {
-        if (isMuted) return;
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        const voices = window.speechSynthesis.getVoices();
-        const preferredVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Microsoft David')) || voices[0];
-        if (preferredVoice) utterance.voice = preferredVoice;
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        window.speechSynthesis.speak(utterance);
-    };
-
-    useEffect(() => {
-        window.speechSynthesis.getVoices();
-    }, []);
-
-    useEffect(() => {
-        if (messages.length === 0) {
-            const greeting = `Online. Systems normal. What's on the agenda, ${userProfile.name}?`;
-            setMessages([{
-                role: 'assistant',
-                content: greeting,
-                timestamp: Date.now()
-            }]);
-            setTimeout(() => speak(greeting), 1000);
+        if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
         }
-    }, []);
-
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+        setIsListening(false);
+        setVocalLevel(0);
+    };
 
     const toggleListening = () => {
         if (isListening) {
             stopRecording();
         } else {
-            setInput('');
             startRecording();
         }
     };
 
-    const handleSendMessage = async (rawInput?: string) => {
-        const textToSend = rawInput || input;
-        if (!textToSend.trim()) return;
+    const handleSendMessage = async () => {
+        if (!inputValue.trim() || isThinking) return;
 
         const userMsg: ChatMessage = {
             role: 'user',
-            content: textToSend,
-            timestamp: Date.now()
+            content: inputValue,
+            timestamp: Date.now(),
+            type: 'text'
         };
 
         setMessages(prev => [...prev, userMsg]);
-        setInput('');
+        setInputValue('');
         setIsThinking(true);
 
         try {
-            const response = await window.api.sendChatMessage(userMsg.content);
+            const response = await (window as any).api.sendChatMessage(inputValue);
             setMessages(prev => [...prev, response]);
-            speak(response.content);
         } catch (error) {
-            console.error('Chat error:', error);
-            const errorMsg = 'Connection interrupted. Please check neural link (Internet).';
+            console.error('[CommandCenter] Chat error:', error);
             setMessages(prev => [...prev, {
                 role: 'assistant',
-                content: errorMsg,
-                timestamp: Date.now()
+                content: "I'm having trouble connecting to my engine. Please check your connection.",
+                timestamp: Date.now(),
+                type: 'text'
             }]);
-            speak(errorMsg);
         } finally {
             setIsThinking(false);
         }
     };
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSendMessage();
-        }
+    /**
+     * FLEXIBLE UI RENDERER
+     * Dynamically renders workflow results from n8n.
+     */
+    const WorkflowResultRenderer = ({ result }: { result: any }) => {
+        if (!result) return null;
+
+        return (
+            <div className="mt-4 p-4 rounded-lg bg-gray-50 border border-gray-100 space-y-4 shadow-sm text-gray-900">
+                <div className="flex items-center space-x-2 border-b border-gray-200 pb-2 mb-2">
+                    <Zap className="w-3 h-3 text-amber-500" />
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Workflow Execution Engine</span>
+                </div>
+
+                {result.summary && (
+                    <div>
+                        <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-tight mb-1">Summary</h4>
+                        <p className="text-sm text-gray-700 leading-normal">{result.summary}</p>
+                    </div>
+                )}
+
+                {Object.entries(result).map(([key, value]) => {
+                    if (key === 'summary' || !Array.isArray(value) || value.length === 0) return null;
+                    const label = key.replace(/_/g, ' ').toUpperCase();
+                    return (
+                        <div key={key}>
+                            <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-tight mb-1">{label}</h4>
+                            <ul className="space-y-1.5">
+                                {value.map((item: any, i: number) => (
+                                    <li key={i} className="flex items-start space-x-2 text-sm text-gray-600">
+                                        <div className="mt-1.5 w-1 h-1 rounded-full bg-blue-400 shrink-0" />
+                                        <span>{typeof item === 'string' ? item : JSON.stringify(item)}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    );
+                })}
+            </div>
+        );
     };
 
     return (
-        <div className="flex flex-col h-[calc(100vh-100px)] max-w-5xl mx-auto">
-            <div className="flex-1 flex flex-col items-center justify-center relative min-h-[400px]">
-                {(isThinking || isListening) && (
-                    <>
-                        <div
-                            className={`absolute rounded-full border-4 transition-all duration-75 ${isListening ? 'border-red-500/20' : 'border-blue-500/20'}`}
-                            style={{
-                                width: isListening ? 200 + (vocalLevel * 2) : 256,
-                                height: isListening ? 200 + (vocalLevel * 2) : 256,
-                                opacity: isListening ? 0.3 + (vocalLevel / 100) : 0.5
-                            }}
-                        ></div>
-                        <div
-                            className={`absolute rounded-full border-2 transition-all duration-150 ${isListening ? 'border-red-400/10' : 'border-blue-400/10'} animate-ping`}
-                            style={{ width: 300, height: 300 }}
-                        ></div>
-                    </>
-                )}
-
-                <div
-                    className={`relative z-10 w-48 h-48 rounded-full shadow-[0_0_50px_rgba(0,0,0,0.1)] border-4 p-1 transition-all duration-75 ${isListening ? 'border-red-400' : isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-white bg-white'} bg-gradient-to-br from-gray-100 to-gray-200 overflow-hidden`}
-                    style={{
-                        transform: `scale(${isListening ? 1 + (vocalLevel / 400) : 1})`,
-                        boxShadow: isListening ? `0 0 ${20 + vocalLevel}px rgba(239, 68, 68, 0.3)` : isThinking ? `0 0 40px rgba(59, 130, 246, 0.2)` : 'none'
-                    }}
-                >
-                    <div className="w-full h-full rounded-full flex items-center justify-center text-6xl bg-white text-gray-800">
-                        {userAvatar || '🤖'}
-                    </div>
-                    <div className={`absolute inset-0 pointer-events-none transition-opacity duration-300 ${isListening ? 'opacity-30 bg-red-500/20' : isThinking ? 'opacity-30 bg-blue-500/20' : 'opacity-0'}`}></div>
-                </div>
-
-                <div className="mt-8 relative">
-                    <div className="absolute -top-12 left-1/2 -translate-x-1/2 flex space-x-1">
-                        {[...Array(5)].map((_, i) => (
-                            <div
-                                key={i}
-                                className={`w-1 h-3 rounded-full transition-all duration-150 ${isListening && vocalLevel > (i * 20) ? 'bg-red-500 h-6' : 'bg-gray-200'}`}
-                            ></div>
-                        ))}
-                    </div>
-                    <h2 className={`text-2xl font-bold tracking-tight text-center ${isDarkMode ? 'text-gray-100' : 'text-gray-800'}`}>
-                        AI Assistant
-                    </h2>
-                    <p className={`text-sm font-medium tracking-widest uppercase mt-1 text-center transition-colors duration-300 ${isListening ? 'text-red-600' : 'text-blue-600'}`}>
-                        {isListening ? 'LISTENING' : isThinking ? 'THINKING' : 'READY'}
-                    </p>
-                </div>
-
-                <button
-                    onClick={() => setIsMuted(!isMuted)}
-                    className={`absolute top-4 right-4 p-3 rounded-full backdrop-blur-sm transition-all border shadow-sm ${isDarkMode ? 'bg-gray-800/50 hover:bg-gray-700 text-gray-300 border-gray-700' : 'bg-white/50 hover:bg-white text-gray-600 border-gray-100'}`}
-                    title={isMuted ? "Unmute Assistant" : "Mute Assistant"}
-                >
-                    {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-                </button>
-            </div>
-
-            <div className={`flex-1 rounded-t-3xl border-t transition-colors duration-300 flex flex-col overflow-hidden ${isDarkMode ? 'bg-gray-900 border-gray-800 shadow-[0_-10px_40px_rgba(0,0,0,0.3)]' : 'bg-white/80 border-gray-100 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] backdrop-blur-md'}`}>
-                <div className="flex-1 overflow-y-auto p-6 space-y-4 scroll-smooth">
-                    {messages.map((msg, idx) => (
-                        <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`max-w-[80%] rounded-2xl px-5 py-3 shadow-sm relative ${msg.role === 'user'
-                                ? 'bg-blue-600 text-white rounded-br-none'
-                                : isDarkMode ? 'bg-gray-800 border border-gray-700 text-gray-100 rounded-bl-none'
-                                    : 'bg-white border border-gray-100 text-gray-800 rounded-bl-none'
+        <div className="flex flex-col h-full bg-white">
+            {/* Activity Stream */}
+            <div className="flex-1 overflow-y-auto p-8 space-y-8 scroll-smooth overflow-x-hidden">
+                {messages.map((msg, idx) => (
+                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in duration-300`}>
+                        <div className={`flex max-w-[85%] space-x-3 ${msg.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''}`}>
+                            <div className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0 shadow-sm ${msg.role === 'user' ? 'bg-gray-100 border border-gray-200' : 'bg-gray-900 border border-gray-900'
                                 }`}>
-                                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                                {msg.type === 'action_request' && (
-                                    <div className="absolute -top-2 -right-2 bg-yellow-400 text-yellow-900 p-1.5 rounded-full shadow-md animate-bounce">
-                                        <Zap className="w-3 h-3 fill-current" />
-                                    </div>
-                                )}
+                                {msg.role === 'user' ? <User className="w-4 h-4 text-gray-600" /> : <Bot className="w-4 h-4 text-gray-100" />}
                             </div>
-                        </div>
-                    ))}
-                    {isThinking && (
-                        <div className="flex justify-start">
-                            <div className={`rounded-2xl rounded-bl-none px-5 py-3 shadow-sm border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
-                                <div className="flex space-x-2">
-                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></div>
-                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce delay-100"></div>
-                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce delay-200"></div>
+
+                            <div className="space-y-1 flex-1 min-w-0">
+                                <div className={`px-4 py-2.5 rounded-lg text-sm leading-relaxed shadow-sm border ${msg.role === 'user'
+                                    ? 'bg-white border-gray-200 text-gray-800'
+                                    : 'bg-gray-900 border-gray-800 text-gray-100'
+                                    }`}>
+                                    <div className="whitespace-pre-wrap">{msg.content}</div>
+
+                                    {/* Workflow Results */}
+                                    {(msg as any).workflow_result && (
+                                        <WorkflowResultRenderer result={(msg as any).workflow_result} />
+                                    )}
+
+                                    {/* Error State */}
+                                    {(msg as any).metadata?.error && (
+                                        <div className="mt-3 p-3 rounded bg-red-500/10 border border-red-500/20 flex items-center space-x-2 text-red-100 text-xs">
+                                            <AlertCircle className="w-3.5 h-3.5" />
+                                            <span>Execution failed. Please check system configurations.</span>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className={`text-[10px] text-gray-400 flex items-center space-x-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                    <Clock className="w-3 h-3" />
+                                    <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    {msg.role === 'assistant' && (
+                                        <>
+                                            <span className="text-gray-200">|</span>
+                                            <div className="flex items-center space-x-1">
+                                                <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                                <span className="text-gray-500">Verified by KRACHET</span>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         </div>
-                    )}
-                    <div ref={messagesEndRef} />
-                </div>
+                    </div>
+                ))}
+                {isThinking && (
+                    <div className="flex justify-start animate-pulse">
+                        <div className="flex space-x-3">
+                            <div className="w-8 h-8 rounded-md bg-gray-900 flex items-center justify-center">
+                                <Bot className="w-4 h-4 text-gray-100" />
+                            </div>
+                            <div className="bg-gray-100 h-9 w-24 rounded-lg border border-gray-200"></div>
+                        </div>
+                    </div>
+                )}
+                <div ref={messagesEndRef} />
+            </div>
 
-                <div className={`p-4 border-t transition-colors duration-300 ${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-100'}`}>
-                    <div className={`relative flex items-center rounded-xl border transition-all duration-300 ${isListening ? 'border-red-300 ring-4 ring-red-50 bg-red-50/50' : isDarkMode ? 'bg-gray-800 border-gray-700 hover:border-blue-500' : 'bg-gray-50 border-gray-200 hover:border-blue-300'} focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500`}>
-                        <button
-                            onClick={toggleListening}
-                            className={`pl-4 transition-all duration-300 ${isListening ? 'text-red-600 scale-125' : 'text-gray-400 hover:text-blue-600'}`}
-                        >
-                            {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                        </button>
-                        <input
-                            type="text"
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            placeholder={isListening ? "I'm listening..." : "Type a command or chat..."}
-                            className={`flex-1 bg-transparent border-none focus:ring-0 px-4 py-3 text-lg ${isDarkMode ? 'text-gray-100 placeholder-gray-500' : 'text-gray-900 placeholder-gray-400'}`}
-                            disabled={isThinking}
-                            autoFocus
+            {/* Input Dashboard */}
+            <div className="p-6 border-t border-gray-200 bg-white shadow-[0_-1px_3px_rgba(0,0,0,0.02)]">
+                <div className="max-w-4xl mx-auto flex items-end space-x-3">
+                    <div className="flex-1 relative">
+                        <textarea
+                            value={inputValue}
+                            onChange={(e) => setInputValue(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    handleSendMessage();
+                                }
+                            }}
+                            placeholder="Type a command or ask KRACHET to run a workflow..."
+                            className="block w-full rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-gray-900 focus:ring-0 resize-none min-h-[44px] max-h-[200px]"
+                            rows={1}
                         />
-                        <button
-                            onClick={() => handleSendMessage()}
-                            disabled={!input.trim() || isThinking || isListening}
-                            className={`p-2 mr-2 rounded-lg transition-all ${!input.trim() || isListening ? 'text-gray-300' : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'}`}
+                    </div>
+                    <div className="flex space-x-2 shrink-0 h-11 items-center">
+                        {isListening && (
+                            <div className="flex items-center space-x-1 px-3 h-full">
+                                {[...Array(3)].map((_, i) => (
+                                    <div
+                                        key={i}
+                                        className="w-1 bg-red-500 rounded-full transition-all duration-75"
+                                        style={{ height: `${Math.max(4, (vocalLevel * (1 + i * 0.2)) / 4)}px` }}
+                                    ></div>
+                                ))}
+                            </div>
+                        )}
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            className={`h-11 w-11 p-0 rounded-lg transition-all duration-300 ${isListening ? 'ring-2 ring-red-500 bg-red-50' : ''}`}
+                            onClick={toggleListening}
                         >
-                            <Send className="w-5 h-5" />
-                        </button>
+                            {isListening ? <Mic className="w-4 h-4 text-red-600 animate-pulse" /> : <MicOff className="w-4 h-4 text-gray-400" />}
+                        </Button>
+                        <Button
+                            onClick={handleSendMessage}
+                            isLoading={isThinking}
+                            className="h-11 px-6 rounded-lg font-bold tracking-tight"
+                        >
+                            <Send className="w-4 h-4" />
+                        </Button>
+                    </div>
+                </div>
+                <div className="max-w-4xl mx-auto mt-3 flex items-center justify-between">
+                    <div className="flex items-center space-x-6">
+                        <div className="flex items-center space-x-1.5 text-[10px] text-gray-400 font-medium">
+                            <Zap className="w-3 h-3 text-amber-500" />
+                            <span>8 Workflows Available</span>
+                        </div>
+                        <div className="flex items-center space-x-1.5 text-[10px] text-gray-400 font-medium cursor-pointer hover:text-gray-900 transition-colors">
+                            <Clock className="w-3 h-3" />
+                            <span>Recent: Generate MOM</span>
+                        </div>
+                    </div>
+                    <div className="text-[10px] text-gray-300 font-mono">
+                        v1.2.0-SaaS
                     </div>
                 </div>
             </div>

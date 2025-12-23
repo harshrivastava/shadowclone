@@ -7,7 +7,7 @@ export interface ChatMessage {
     role: 'user' | 'assistant' | 'system';
     content: string;
     timestamp: number;
-    type?: 'text' | 'action_request';
+    type?: 'text' | 'action_request' | 'workflow_request';
     metadata?: any;
 }
 

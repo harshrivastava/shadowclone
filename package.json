@@ -14,7 +14,7 @@
     },
     "build": {
         "appId": "com.shadowclone.app",
-        "productName": "ShadowAssistant",
+        "productName": "KRACHET",
         "directories": {
             "output": "dist"
         },
@@ -36,6 +36,7 @@
         "electron-builder": "^24.9.1",
         "postcss": "^8.4.32",
         "postcss-loader": "^7.3.3",
+        "react-router-dom": "^7.11.0",
         "style-loader": "^3.3.3",
         "ts-loader": "^9.5.1",
         "typescript": "^5.2.2",

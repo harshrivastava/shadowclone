@@ -5,6 +5,8 @@ import Groq from 'groq-sdk';
 import dotenv from 'dotenv';
 import { ChatService } from './services/ChatService';
 import { AutomationService } from './services/AutomationService';
+import { WorkflowExecutionService } from './services/WorkflowExecutionService';
+import { WorkflowID } from './services/WorkflowTypes';
 
 // Load environment variables
 dotenv.config();
@@ -12,6 +14,7 @@ dotenv.config();
 let mainWindow: BrowserWindow | null = null;
 const chatService = new ChatService();
 const automationService = new AutomationService();
+const workflowService = new WorkflowExecutionService();
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -24,7 +27,7 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js')
         },
-        title: 'ShadowClone AI',
+        title: 'KRACHET - a ShadowClone AI',
         frame: true,
         titleBarStyle: 'default'
     });
@@ -45,12 +48,37 @@ function createWindow() {
 ipcMain.handle('chat:send', async (event, message) => {
     const response = await chatService.processMessage(message, { profile: { name: 'User', tone: 'helpful' } });
 
-    // Execute action if present
+    // Handle Desktop Automations
     if (response.type === 'action_request' && response.metadata) {
         try {
             await automationService.execute(response.metadata);
         } catch (error) {
             console.error('[Main] Action execution failed:', error);
+        }
+    }
+
+    // Handle External n8n Workflows
+    if (response.type === 'workflow_request' && response.metadata) {
+        try {
+            console.log(`[Main] External execution requested for: ${response.metadata.workflow_id}`);
+            const result = await workflowService.runWorkflow(
+                response.metadata.workflow_id as WorkflowID,
+                response.metadata.params
+            );
+
+            // Append result for the frontend to render dynamically
+            return {
+                ...response,
+                workflow_result: result
+            };
+        } catch (error: any) {
+            console.error('[Main] Workflow error:', error.message);
+            // Return system error to frontend
+            return {
+                ...response,
+                content: `SYSTEM ERROR: ${error.message}. Please check your configuration or n8n instance.`,
+                metadata: { error: true, original: response.metadata }
+            };
         }
     }
 
