@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('api', {
     transcribe: (audioData: { audioBuffer: Uint8Array, mimeType: string }) =>
         ipcRenderer.invoke('ai:transcribe', audioData),
 
+    // AI Scheduler
+    scheduleAssist: (data: any) => ipcRenderer.invoke('ai:schedule-assist', data),
+
     // Utility
     on: (channel: string, func: (...args: any[]) => void) => {
         ipcRenderer.on(channel, (event, ...args) => func(...args));

@@ -7,6 +7,7 @@ import { ChatService } from './services/ChatService';
 import { AutomationService } from './services/AutomationService';
 import { WorkflowExecutionService } from './services/WorkflowExecutionService';
 import { WorkflowID } from './services/WorkflowTypes';
+import { ScheduleAiService } from './services/ScheduleAiService';
 
 // Load environment variables
 dotenv.config();
@@ -15,6 +16,7 @@ let mainWindow: BrowserWindow | null = null;
 const chatService = new ChatService();
 const automationService = new AutomationService();
 const workflowService = new WorkflowExecutionService();
+const scheduleAiService = new ScheduleAiService();
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -128,6 +130,16 @@ ipcMain.handle('ai:transcribe', async (event, { audioBuffer, mimeType }) => {
     } catch (error: any) {
         console.error('Transcription error:', error);
         return { success: false, error: error.message };
+    }
+});
+
+// AI Scheduler Assistance IPC
+ipcMain.handle('ai:schedule-assist', async (event, { intent, userInput, availableSlots, existingEvents }) => {
+    try {
+        const result = await scheduleAiService.getScheduleDecision(intent, userInput, availableSlots, existingEvents);
+        return result;
+    } catch (error: any) {
+        return { error: error.message };
     }
 });
 
